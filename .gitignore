@@ -6,6 +6,8 @@ __pycache__/
 # C extensions
 *.so
 
+winequality-red.csv
+
 # Distribution / packaging
 .Python
 build/
