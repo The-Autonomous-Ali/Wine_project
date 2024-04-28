@@ -1,98 +1,48 @@
-name: workflow
+name: CI/CD Pipeline
 
 on:
   push:
-    branches:
-      - main
-    paths-ignore:
-      - 'README.md'
-
-permissions:
-  id-token: write
-  contents: read
+    branches: [ main ]
+  pull_request:
 
 jobs:
-  integration:
-    name: Continuous Integration
-    runs-on: ubuntu-latest
+  build-and-test:
+    runs-on: ubuntu-latest  # You can choose a different runner OS here
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v3
-
-      - name: Lint code
-        run: echo "Linting repository"
-
-      - name: Run unit tests
-        run: echo "Running unit tests"
-
-  build-and-push-ecr-image:
-    name: Continuous Delivery
-    needs: integration
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v3
-
-      - name: Install Utilities
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y jq unzip
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v1
+      - uses: actions/checkout@v3  # Checks out your code from GitHub
+      # (Add your project specific build and test steps here)
+      - uses: actions/checkout@v3  # Checkout code again (optional, see note below)
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          fetch-depth: 1  # Only fetch the latest commit (reduces download time)
+          submodules: false  # Exclude submodules (if applicable)
+          exclude: '**/README.md'  # Exclude README.md file
 
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v1
-
-      - name: Build, tag, and push image to Amazon ECR
-        id: build-image
-        env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY_NAME }}
-          IMAGE_TAG: latest
-        run: |
-          # Build a docker container and
-          # push it to ECR so that it can
-          # be deployed to ECS.
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          echo "::set-output name=image::$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
-          
-          
-  Continuous-Deployment:
-    needs: build-and-push-ecr-image
-    runs-on: self-hosted
+  deploy:
+    runs-on: ubuntu-latest  # You can choose a different runner OS here
+    needs: build-and-test  # This job depends on the successful completion of build-and-test
     steps:
-      - name: Checkout
-        uses: actions/checkout@v3
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v1
+      - uses: actions/checkout@v3
+      - name: Login to AWS ECR
+        uses: aws-actions/aws-ecr-docker-login@v2  # Login to ECR with AWS credentials
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region: your-aws-region  # Replace with your AWS region
+          registry-id: your-account-id.dkr.ecr.your-aws-region.amazonaws.com  # Replace with your ECR registry ID
 
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v1
-      
-      
-      - name: Pull latest images
-        run: |
-         docker pull ${{secrets.AWS_ECR_LOGIN_URI}}/${{ secrets.ECR_REPOSITORY_NAME }}:latest
-         
-      - #name: Stop and remove container if running
-        #run: |
-         #docker ps -q --filter "name=cnncls" | grep -q . && docker stop cnncls && docker rm -fv cnncls
-       
-      - name: Run Docker Image to serve users
-        run: |
-         docker run -d -p 8080:8080 --name=cnncls -e 'AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}' -e 'AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}' -e 'AWS_REGION=${{ secrets.AWS_REGION }}'  ${{secrets.AWS_ECR_LOGIN_URI}}/${{ secrets.ECR_REPOSITORY_NAME }}:latest
-      - name: Clean previous images and containers
-        run: |
-         docker system prune -f
+      - name: Build and push Docker image to ECR
+        uses: aws-actions/aws-ecr-docker-push@v2  # Build and push image to ECR
+        with:
+          aws-region: your-aws-region  # Replace with your AWS region
+          repository-name: your-ecr-repository-name  # Replace with your ECR repository name
+          image-tag: ${{ github.sha }}  # Use the commit SHA for image tagging
+          dockerfile-path: docker/Dockerfile  # Path to your Dockerfile (replace if needed)
+
+      - name: Deploy to AWS using CodeDeploy
+        uses: aws-actions/aws-codedeploy@v1  # Deploy using AWS CodeDeploy
+        with:
+          aws-region: your-aws-region  # Replace with your AWS region
+          application-name: your-codedeploy-application-name  # Replace with your CodeDeploy application name
+          deployment-group-name: your-codedeploy-deployment-group-name  # Replace with your CodeDeploy deployment group name
+          service-role-arn: your-codedeploy-service-role-arn  # Replace with the IAM role ARN for CodeDeploy
+          # (Optional) Specify a deployment configuration name if you have one
+
+# You can add additional jobs for post-deployment tasks here
